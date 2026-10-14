@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>COMP4422 M1 &mdash; Geometry &amp; Camera (WebGL2)</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0c10;
+                 font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    #glcanvas { display: block; width: 100vw; height: 100vh; cursor: grab; touch-action: none; }
+    #glcanvas.dragging { cursor: grabbing; }
+    #hud { position: fixed; top: 12px; left: 12px; color: #dfe6f2; pointer-events: none; }
+    #hud h1 { font-size: 16px; margin: 0 0 4px; font-weight: 600; }
+    #hud span { font-size: 12px; color: #9fb0c8; }
+    #controls { position: fixed; bottom: 12px; left: 12px; color: #9fb0c8; font-size: 12px;
+                line-height: 1.5; pointer-events: none; background: rgba(10,12,16,.55);
+                padding: 8px 10px; border-radius: 6px; }
+    #controls b { color: #dfe6f2; }
+    #error { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+             max-width: 80vw; background: #2a1515; color: #ffd7d7; padding: 16px 20px;
+             border-radius: 8px; font-size: 13px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas"></canvas>
+  <div id="hud">
+    <h1>COMP4422 M1 &middot; Geometry &amp; Camera</h1>
+    <span id="info"></span>
+  </div>
+  <div id="controls">
+    <b>Controls</b><br>
+    Drag mouse: look around &nbsp;&middot;&nbsp; W/S: forward / back &nbsp;&middot;&nbsp; A/D: strafe left / right<br>
+    Q/E: up / down &nbsp;&middot;&nbsp; Arrow keys: turn &nbsp;&middot;&nbsp; Scroll: field of view &nbsp;&middot;&nbsp; Shift: move faster
+  </div>
+  <div id="error"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
