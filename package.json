@@ -1,10 +1,13 @@
 {
-  "name": "comp4422-m1",
-  "version": "1.0.0",
+  "name": "comp4422-m2",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "COMP4422 M1: WebGL2 geometry + perspective camera (raw WebGL2, own math library)",
+  "description": "COMP4422 M2: WebGL2 UV texturing + delta-time animation (raw WebGL2, own math library)",
   "scripts": {
     "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

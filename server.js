@@ -41,5 +41,5 @@ http
     });
   })
   .listen(port, () => {
-    console.log(`COMP4422 M1 running at http://localhost:${port}`);
+    console.log(`COMP4422 M2 running at http://localhost:${port}`);
   });
