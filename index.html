@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>COMP4422 M2 &mdash; UV Texturing &amp; Animation (WebGL2)</title>
+  <title>COMP4422 Project &mdash; Animated 3D Scene (WebGL2)</title>
   <style>
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0c10;
                  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -23,16 +23,24 @@
 </head>
 <body>
   <canvas id="glcanvas"></canvas>
+  
   <div id="hud">
-    <h1>COMP4422 M2 &middot; UV Texturing &amp; Animation</h1>
+    <h1>COMP4422 Project &middot; Animated 3D Scene</h1>
     <span id="info"></span>
   </div>
+
   <div id="controls">
-    <b>Controls</b><br>
-    Drag mouse: look around &nbsp;&middot;&nbsp; W/S: forward / back &nbsp;&middot;&nbsp; A/D: strafe left / right<br>
-    Q/E: up / down &nbsp;&middot;&nbsp; Arrow keys: turn &nbsp;&middot;&nbsp; Scroll: field of view &nbsp;&middot;&nbsp; Shift: move faster
+    <b>Camera & Navigation</b><br>
+    <b>Drag</b>: Look Around &nbsp;&middot;&nbsp; <b>W/S</b>: Forward/Back &nbsp;&middot;&nbsp; <b>A/D</b>: Strafe<br>
+    <b>Q/E</b>: Up/Down &nbsp;&middot;&nbsp; <b>Arrows</b>: Turn &nbsp;&middot;&nbsp; <b>Scroll</b>: Zoom &nbsp;&middot;&nbsp; <b>Shift</b>: Speed
+    <br><br>
+    <b>Lighting & Scene</b><br>
+    <b>1</b>: Ambient &nbsp;&middot;&nbsp; <b>2</b>: Diffuse &nbsp;&middot;&nbsp; <b>3</b>: Specular &nbsp;&middot;&nbsp; <b>L</b>: Pause Light<br>
+    <b>P</b>: Pause Animation &nbsp;&middot;&nbsp; <b>R</b>: Reset All (Light & State)
   </div>
+
   <div id="error"></div>
+
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

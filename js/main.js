@@ -1,16 +1,12 @@
-// main.js — COMP4422 M2 scene: raw WebGL2, own Vec3/Mat4 library, indexed meshes,
-// a loaded .obj with UV texture mapping, a controllable perspective camera,
-// depth test, and a requestAnimationFrame animation loop driven by delta time.
-//
-// M1 features (geometry, indexed drawElements, camera, depth test, scene) are
-// preserved; M2 adds GLSL ES 3.00 texture sampling, a UV vertex attribute and
-// explicit per-frame model-matrix animation.
+// main.js — COMP4422 Group 12: Animated 3D Scene with WebGL2
+// Implements M1 (geometry/camera), M2 (texturing/animation), and M3 (Blinn-Phong/scene graph/interaction).
 
 import { Vec3, Mat4 } from './math.js';
 import { Camera } from './camera.js';
 import { createCubeMesh, createPlaneMesh, createGridMesh } from './primitives.js';
 import { loadObj } from './obj-loader.js';
 import { loadTexture, createWhiteTexture } from './texture.js';
+import { SceneNode, drawScene } from './scenegraph.js';
 
 const TEXTURE_URL = 'assets/textures/uv-checker-1024.png';
 
@@ -25,9 +21,6 @@ if (!gl) {
 }
 
 // ---------------------------------------------------------------- shaders
-// M2: GLSL ES 3.00, `in`/`out`, a vec2 UV attribute, `texture()` and an explicit
-// fragment output. The vertex stage still computes world position and normal so
-// the M1-style shading is retained.
 const TEXTURED_VS = `#version 300 es
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
@@ -35,13 +28,14 @@ layout(location = 2) in vec2 aUV;
 
 uniform mat4 uModel;
 uniform mat4 uMVP;
+uniform mat3 uNormalMat;
 
 out vec3 vNormal;
 out vec3 vWorldPos;
 out vec2 vUV;
 
 void main() {
-  vNormal = mat3(uModel) * aNormal;
+  vNormal = uNormalMat * aNormal;
   vWorldPos = (uModel * vec4(aPosition, 1.0)).xyz;
   vUV = aUV;
   gl_Position = uMVP * vec4(aPosition, 1.0);
@@ -55,11 +49,19 @@ in vec3 vWorldPos;
 in vec2 vUV;
 
 uniform sampler2D uTexture;
-uniform float uTexMix;      // 1 = fully textured, 0 = flat colour
-uniform vec3 uColor;        // albedo tint (also keeps M1's per-object colours)
-uniform vec3 uLightDir;
+uniform float uTexMix;
+uniform vec3 uColor;
+
+uniform vec3 uLightPos;
 uniform vec3 uCameraPos;
 uniform float uShininess;
+
+uniform vec3 uAmbientColor;
+uniform vec3 uDiffuseColor;
+uniform vec3 uSpecularColor;
+uniform bool uAmbientOn;
+uniform bool uDiffuseOn;
+uniform bool uSpecularOn;
 
 out vec4 outColor;
 
@@ -68,15 +70,17 @@ void main() {
   vec3 albedo = uColor * mix(vec3(1.0), texel.rgb, uTexMix);
 
   vec3 N = normalize(vNormal);
-  vec3 L = normalize(uLightDir);
+  vec3 L = normalize(uLightPos - vWorldPos);
   vec3 V = normalize(uCameraPos - vWorldPos);
   vec3 H = normalize(L + V);
 
-  float diff = max(dot(N, L), 0.0);
-  float spec = pow(max(dot(N, H), 0.0), uShininess) * 0.18;
+  vec3 ambient = uAmbientOn ? uAmbientColor * albedo : vec3(0.0);
+  float ndl = max(dot(N, L), 0.0);
+  vec3 diffuse = uDiffuseOn ? uDiffuseColor * albedo * ndl : vec3(0.0);
+  float spec = pow(max(dot(N, H), 0.0), uShininess);
+  vec3 specular = uSpecularOn ? uSpecularColor * spec : vec3(0.0);
 
-  vec3 colour = albedo * (0.42 + 0.58 * diff) + vec3(spec);
-  outColor = vec4(colour, 1.0);
+  outColor = vec4(ambient + diffuse + specular, 1.0);
 }`;
 
 const LINE_VS = `#version 300 es
@@ -100,23 +104,32 @@ const lineProg = createProgram(gl, LINE_VS, LINE_FS);
 const solidU = {
   model: gl.getUniformLocation(solidProg, 'uModel'),
   mvp: gl.getUniformLocation(solidProg, 'uMVP'),
+  normalMat: gl.getUniformLocation(solidProg, 'uNormalMat'),
   color: gl.getUniformLocation(solidProg, 'uColor'),
   texture: gl.getUniformLocation(solidProg, 'uTexture'),
   texMix: gl.getUniformLocation(solidProg, 'uTexMix'),
-  lightDir: gl.getUniformLocation(solidProg, 'uLightDir'),
+  lightPos: gl.getUniformLocation(solidProg, 'uLightPos'),
   cameraPos: gl.getUniformLocation(solidProg, 'uCameraPos'),
   shininess: gl.getUniformLocation(solidProg, 'uShininess'),
+  ambientColor: gl.getUniformLocation(solidProg, 'uAmbientColor'),
+  diffuseColor: gl.getUniformLocation(solidProg, 'uDiffuseColor'),
+  specularColor: gl.getUniformLocation(solidProg, 'uSpecularColor'),
+  ambientOn: gl.getUniformLocation(solidProg, 'uAmbientOn'),
+  diffuseOn: gl.getUniformLocation(solidProg, 'uDiffuseOn'),
+  specularOn: gl.getUniformLocation(solidProg, 'uSpecularOn'),
 };
 const lineU = {
   mvp: gl.getUniformLocation(lineProg, 'uMVP'),
   color: gl.getUniformLocation(lineProg, 'uColor'),
 };
 
-// Uniforms that do not change every frame.
+// Static uniforms
 gl.useProgram(solidProg);
-gl.uniform3f(solidU.lightDir, 0.4, 0.9, 0.5);
-gl.uniform1f(solidU.shininess, 32.0);
-gl.uniform1i(solidU.texture, 0); // sampler unit 0
+gl.uniform1f(solidU.shininess, 128.0);
+gl.uniform1i(solidU.texture, 0);
+gl.uniform3f(solidU.ambientColor, 0.35, 0.35, 0.35);
+gl.uniform3f(solidU.diffuseColor, 0.8, 0.8, 0.8);
+gl.uniform3f(solidU.specularColor, 1.0, 1.0, 1.0);
 
 // ---------------------------------------------------------------- GL state
 gl.enable(gl.DEPTH_TEST);
@@ -134,18 +147,11 @@ const cubeMesh = createCubeMesh(gl, 1);
 const planeMesh = createPlaneMesh(gl, 50);
 const gridMesh = createGridMesh(gl, 50, 25);
 
-const camera = new Camera({ position: new Vec3(0, 3, 9) });
+const camera = new Camera({ position: new Vec3(0, 6, 12) });
 
-// Module-level references used by the verification hook.
 let knotVAO = null;
 let textureMeta = { width: 0, height: 0, url: '', fallback: false };
-let sceneObjectsList = [];
-let planeMaterial = null;
-
-// A small orbiting helper used by the animated objects.
-function orbit(r, y, t, phase) {
-  return new Vec3(Math.cos(t * 0.6 + phase) * r, y, Math.sin(t * 0.6 + phase) * r);
-}
+let sceneGraphRoot = null;
 
 // Debug/verification hook (read-only for the app).
 window.__M2__ = {
@@ -163,6 +169,7 @@ window.addEventListener('unhandledrejection', (e) =>
   window.__M2__.errors.push(String(e.reason && e.reason.message ? e.reason.message : e.reason)),
 );
 
+// ---------------------------------------------------------------- Main
 async function main() {
   let knotMesh = null;
   try {
@@ -175,8 +182,6 @@ async function main() {
       '  node server.js   or   python -m http.server 8000');
   }
 
-  // M2: upload the UV checker texture and keep a 1x1 white texture for the
-  // untextured ground plane so every solid draw can share one program.
   let textureInfo;
   try {
     textureInfo = await loadTexture(gl, TEXTURE_URL, { anisotropy: 8 });
@@ -200,71 +205,76 @@ async function main() {
   };
   const whiteTexture = createWhiteTexture(gl);
 
-  const knotMaterial = { texture: textureInfo.texture, texMix: 1.0 };
-  const cubeMaterial = { texture: textureInfo.texture, texMix: 0.65 };
-  planeMaterial = { texture: whiteTexture, texMix: 0.0 };
+// Scene Graph setup
+  const root = new SceneNode('root');
+  const ground = new SceneNode('ground', {
+    mesh: planeMesh,
+    texture: whiteTexture,
+    color: [0.10, 0.12, 0.16],
+    texMix: 0.0,
+  });
+  const knot = new SceneNode('knot', {
+    mesh: knotMesh,
+    texture: textureInfo.texture,
+    color: [0.98, 0.97, 0.95],
+    texMix: 1.0,
+  });
 
-  const objects = [
-    {
-      name: 'knot',
-      mesh: knotMesh,
-      material: knotMaterial,
-      color: [0.98, 0.97, 0.95],
-      getState: (t) => ({
-        pos: new Vec3(0, 2.4 + Math.sin(t * 0.9) * 0.12, 0),
-        rotX: Math.sin(t * 0.5) * 0.22,
-        rotY: t * 0.45,
-        rotZ: 0,
-        scale: 1,
-      }),
-    },
-    {
-      name: 'cube-red',
-      mesh: cubeMesh,
-      material: cubeMaterial,
-      color: [0.95, 0.45, 0.40],
-      getState: (t) => ({
-        pos: orbit(4.2, 0.8 + Math.sin(t * 1.1) * 0.25, t, 0),
-        rotX: t * 0.7,
-        rotY: t * 1.0,
-        rotZ: t * 0.35,
-        scale: 0.7 + Math.sin(t * 1.4) * 0.05,
-      }),
-    },
-    {
-      name: 'cube-green',
-      mesh: cubeMesh,
-      material: cubeMaterial,
-      color: [0.40, 0.90, 0.55],
-      getState: (t) => ({
-        pos: orbit(4.2, 0.8 + Math.sin(t * 1.1 + 2.1) * 0.25, t, Math.PI * 2 / 3),
-        rotX: -t * 0.6,
-        rotY: -t * 1.0,
-        rotZ: t * 0.4,
-        scale: 0.7 + Math.sin(t * 1.4 + 2.1) * 0.05,
-      }),
-    },
-    {
-      name: 'cube-blue',
-      mesh: cubeMesh,
-      material: cubeMaterial,
-      color: [0.45, 0.60, 1.00],
-      getState: (t) => ({
-        pos: orbit(4.2, 0.8 + Math.sin(t * 1.1 + 4.2) * 0.25, t, Math.PI * 4 / 3),
-        rotX: t * 0.8,
-        rotY: t * 1.5,
-        rotZ: -t * 0.3,
-        scale: 0.7 + Math.sin(t * 1.4 + 4.2) * 0.05,
-      }),
-    },
-  ];
-  sceneObjectsList = objects;
+  const orbitPivot = new SceneNode('orbitPivot');
+  const parentCube = new SceneNode('parentCube', {
+    mesh: cubeMesh,
+    texture: textureInfo.texture,
+    color: [0.95, 0.45, 0.40],
+    texMix: 0.65,
+  });
+  const childCube = new SceneNode('childCube', {
+    mesh: cubeMesh,
+    texture: textureInfo.texture,
+    color: [0.40, 0.90, 0.55],
+    texMix: 0.65,
+  });
+
+  root.addChild(ground);
+  root.addChild(knot);
+  root.addChild(orbitPivot);
+  orbitPivot.addChild(parentCube);
+  parentCube.addChild(childCube);
+
+  sceneGraphRoot = root;
+  window.__M3__ = { root, knot, parentCube, childCube, orbitPivot };
+
+// Interaction state
+  const lightState = {
+    ambient: true,
+    diffuse: true,
+    specular: true,
+    orbit: true,
+  };
+
+  let lightAngle = 0;
+  let isPaused = false;
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Digit1') lightState.ambient = !lightState.ambient;
+    if (e.code === 'Digit2') lightState.diffuse = !lightState.diffuse;
+    if (e.code === 'Digit3') lightState.specular = !lightState.specular;
+    if (e.code === 'KeyL') lightState.orbit = !lightState.orbit;
+    if (e.code === 'KeyP') isPaused = !isPaused;
+    if (e.code === 'KeyR') {
+      lightAngle = 0;
+      lightState.ambient = true;
+      lightState.diffuse = true;
+      lightState.specular = true;
+      lightState.orbit = true;
+      isPaused = false;
+    }
+});
 
   const uvFloats = knotMesh ? knotMesh.vertexCount * 2 : 0;
   infoBox.textContent =
     `WebGL2 / GLSL ES 3.00 · texture ${textureInfo.width}x${textureInfo.height} · ` +
-    `UV floats @2: ${uvFloats} · depth test: ON`;
-
+    `UV floats @2: ${uvFloats} · depth: ON`;
+    
   setupInput();
 
   let last = performance.now();
@@ -272,20 +282,61 @@ async function main() {
   let fpsTime = 0;
   let fpsFrames = 0;
 
-  function frame(now) {
-    // Clamp dt so a background tab or a breakpoint cannot teleport the scene.
-    const dt = Math.min(Math.max((now - last) / 1000, 0), 0.05);
-    last = now;
-    window.__M2__.elapsed += dt;
-    const t = window.__M2__.elapsed;
+    function frame(now) {
+      const rawDt = Math.min(Math.max((now - last) / 1000, 0), 0.05);
+      last = now;
+    
+      const animDt = isPaused ? 0 : rawDt;
+    
+      window.__M2__.elapsed += animDt;
+      const t = window.__M2__.elapsed;
+      
+      // Animate Scene Graph
+      knot.localMatrix = Mat4.multiply(
+        Mat4.translation(0, 4.0 + Math.sin(t * 0.9) * 0.12, 0),
+        Mat4.multiply(
+          Mat4.rotationY(t * 0.45),
+          Mat4.rotationX(Math.sin(t * 0.5) * 0.22)
+        )
+      );
 
-    updateCamera(dt);
-    render(objects, t);
+    orbitPivot.localMatrix = Mat4.rotationY(t * 0.6);
 
+    parentCube.localMatrix = Mat4.multiply(
+      Mat4.translation(4.2, 0.8, 0),
+      Mat4.multiply(
+        Mat4.rotationY(t * 1.0),
+        Mat4.rotationX(t * 0.7)
+      )
+    );
+
+    childCube.localMatrix = Mat4.multiply(
+      Mat4.translation(1.5, 0.5, 0),
+      Mat4.scaling(0.5, 0.5, 0.5)
+    );
+
+    root.updateWorld(Mat4.identity());
+
+    // Lighting updates
+    if (lightState.orbit && !isPaused) {
+      lightAngle += animDt * 0.7; 
+    }
+    const lightPos = [5 * Math.cos(lightAngle), 5, 5 * Math.sin(lightAngle)];
+    gl.useProgram(solidProg);
+    gl.uniform3fv(solidU.lightPos, lightPos);
+    gl.uniform3f(solidU.cameraPos, camera.position.x, camera.position.y, camera.position.z);
+    gl.uniform1i(solidU.ambientOn, lightState.ambient ? 1 : 0);
+    gl.uniform1i(solidU.diffuseOn, lightState.diffuse ? 1 : 0);
+    gl.uniform1i(solidU.specularOn, lightState.specular ? 1 : 0);
+
+    updateCamera(rawDt);
+    render(t);
+
+    // HUD
     window.__M2__.frameCount++;
     fpsFrames++;
-    fpsTime += dt;
-    hudTimer += dt;
+    fpsTime += rawDt;
+    hudTimer += rawDt;
 
     if (fpsTime >= 0.5) {
       window.__M2__.fps = fpsFrames / fpsTime;
@@ -311,7 +362,7 @@ async function main() {
 }
 
 // ---------------------------------------------------------------- rendering
-function render(objects, t) {
+function render(t) {
   gl.viewport(0, 0, canvas.width, canvas.height);
 
   const aspect = canvas.width / canvas.height;
@@ -321,37 +372,36 @@ function render(objects, t) {
 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  // The ground stays a flat M1-style material (white 1x1 texture + uTexMix=0).
-  drawSolid(planeMesh, planeMaterial, [0.10, 0.12, 0.16], Mat4.identity(), pv);
   drawLine(gridMesh, [0.22, 0.26, 0.34], Mat4.identity(), pv);
 
-  for (const obj of objects) {
-    if (!obj.mesh) continue;
-    const s = obj.getState(t);
-    const rot = Mat4.multiply(
-      Mat4.multiply(Mat4.rotationY(s.rotY), Mat4.rotationX(s.rotX)),
-      Mat4.rotationZ(s.rotZ || 0),
-    );
-    const model = Mat4.multiply(
-      Mat4.multiply(Mat4.translation(s.pos.x, s.pos.y, s.pos.z), rot),
-      Mat4.scaling(s.scale, s.scale, s.scale),
-    );
-    obj.model = model;
-    obj.lastState = s;
-    drawSolid(obj.mesh, obj.material, obj.color, model, pv);
-  }
+  if (!sceneGraphRoot) return;
+  drawScene(sceneGraphRoot, (node) => {
+    drawSolid(node.mesh, node, pv);
+  });
 }
 
-function drawSolid(mesh, material, color, model, pv) {
+function drawSolid(mesh, node, pv) {
   gl.useProgram(solidProg);
   gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, material.texture);
+  gl.bindTexture(gl.TEXTURE_2D, node.texture);
   gl.uniform1i(solidU.texture, 0);
-  gl.uniform1f(solidU.texMix, material.texMix);
-  gl.uniformMatrix4fv(solidU.model, false, model.m);
-  gl.uniformMatrix4fv(solidU.mvp, false, Mat4.multiply(pv, model).m);
-  gl.uniform3fv(solidU.color, color);
-  gl.uniform3f(solidU.cameraPos, camera.position.x, camera.position.y, camera.position.z);
+  gl.uniform1f(solidU.texMix, node.texMix);
+  gl.uniform3fv(solidU.color, node.color);
+
+  gl.uniformMatrix4fv(solidU.model, false, node.worldMatrix.m);
+  gl.uniformMatrix4fv(solidU.mvp, false, Mat4.multiply(pv, node.worldMatrix).m);
+
+  const inv = Mat4.invert(node.worldMatrix);
+  if (inv) {
+    const normalMat4 = Mat4.transpose(inv);
+    const n3 = new Float32Array([
+      normalMat4.m[0], normalMat4.m[1], normalMat4.m[2],
+      normalMat4.m[4], normalMat4.m[5], normalMat4.m[6],
+      normalMat4.m[8], normalMat4.m[9], normalMat4.m[10],
+    ]);
+    gl.uniformMatrix3fv(solidU.normalMat, false, n3);
+  }
+
   mesh.draw();
 }
 
@@ -432,7 +482,6 @@ function diagnostics() {
   const uvSize = gl.getVertexAttrib(2, gl.VERTEX_ATTRIB_ARRAY_SIZE);
   gl.bindVertexArray(prevVAO);
 
-  // The last solid draw leaves the checker texture bound on unit 0.
   if (gl.getParameter(gl.ACTIVE_TEXTURE) !== gl.TEXTURE0) gl.activeTexture(gl.TEXTURE0);
   const tex = gl.getParameter(gl.TEXTURE_BINDING_2D);
   const texWidth = textureMeta.width;
@@ -457,19 +506,29 @@ function diagnostics() {
       url: textureMeta.url,
       fallback: textureMeta.fallback,
     },
-    uvAttribute: {
+      uvAttribute: {
       location: 2,
       enabled: uvEnabled,
       size: uvSize,
-      vertexCount: sceneObjectsList.find((o) => o.name === 'knot')?.mesh?.vertexCount ?? 0,
+      vertexCount: findNodeByName(sceneGraphRoot, 'knot')?.mesh?.vertexCount ?? 0,
     },
     glError: gl.getError(),
     pageErrors: window.__M2__.errors.slice(),
   };
 }
 
+function findNodeByName(node, name) {
+  if (!node) return null;
+  if (node.name === name) return node;
+  for (const child of node.children) {
+    const found = findNodeByName(child, name);
+    if (found) return found;
+  }
+  return null;
+}
+
 function snapshot() {
-  const knot = sceneObjectsList.find((o) => o.name === 'knot');
+  const knot = findNodeByName(sceneGraphRoot, 'knot');
   return {
     ready: window.__M2__.ready,
     elapsed: window.__M2__.elapsed,
@@ -481,12 +540,10 @@ function snapshot() {
       pitch: camera.pitch,
       fov: camera.fov,
     },
-    knotModel: knot && knot.model ? Array.from(knot.model.m) : null,
-    knotState: knot && knot.lastState
+    knot: knot
       ? {
-          pos: [knot.lastState.pos.x, knot.lastState.pos.y, knot.lastState.pos.z],
-          rotY: knot.lastState.rotY,
-          scale: knot.lastState.scale,
+          worldMatrix: Array.from(knot.worldMatrix.m),
+          localMatrix: Array.from(knot.localMatrix.m),
         }
       : null,
   };
